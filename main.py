@@ -37,10 +37,10 @@ class SeatAutoBooker:
 
         logging.info('Creating SeatAutoBooker object')
 
-        # 你的账号密码（注意信息安全！）
-        self.un = "23030711"  
+       
+        self.un = os.environ["SCHOOL_ID"].strip()  # 从保险箱读取学号
         print("使用用户：{}".format(self.un))
-        self.pd = "20050718Why"  
+        self.pd = os.environ["PASSWORD"].strip()   # 从保险箱读取密码
         
         self.SCKey = None
         try:
