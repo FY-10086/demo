@@ -23,7 +23,6 @@ logging.basicConfig(
 time_zone = 8  # 时区
 
 def get_seats_with_config(user_config, date_config, seat_config):
-    # 二楼东/二楼西/四楼/三楼大厅/守正书院/求新书院/自定义
     seat_name = date_config['name']
     if seat_name == "自定义":
         return user_config['自定义']
@@ -37,10 +36,10 @@ class SeatAutoBooker:
 
         logging.info('Creating SeatAutoBooker object')
 
-       
-        self.un = os.environ["SCHOOL_ID"].strip()  # 从保险箱读取学号
-        print("使用用户：{}".format(self.un))
-        self.pd = os.environ["PASSWORD"].strip()   # 从保险箱读取密码
+        # 🔒 安全模式：从 GitHub Secrets 中读取你的账号和密码
+        self.un = os.environ.get("SCHOOL_ID", "").strip()
+        print("使用用户：***")  # 在日志中隐藏真实学号，保护隐私
+        self.pd = os.environ.get("PASSWORD", "").strip()
         
         self.SCKey = None
         try:
@@ -52,8 +51,9 @@ class SeatAutoBooker:
         chrome_options.add_argument('--headless')
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
+        # 💻 新增：强制设置浏览器分辨率为 1920x1080（解决云端小屏幕问题）
+        chrome_options.add_argument('--window-size=1920,1080')
         
-        # 自动下载匹配版本的 ChromeDriver
         self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
         self.wait = WebDriverWait(self.driver, 10, 0.5)
         self.cookie = None
@@ -61,7 +61,6 @@ class SeatAutoBooker:
         self.cfg = booker_config
 
     def book_favorite_seat(self, user_config, seat_config):
-        # 判断是否到了预约时间
         the_day_after_tomorrow = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][(datetime.now().weekday() + 2) % 7]
         seat_type = seat_config[user_config[the_day_after_tomorrow]['name']]["type"]
         
@@ -114,7 +113,6 @@ class SeatAutoBooker:
     def login(self):
         logging.info('Login in')
 
-        # 兼容性更强的 XPath
         user_path_selector = """//input[@placeholder='请输入学工号/绑定手机/证件号' or @name='username']"""
         pwd_path_selector = """//input[@type='password']"""
         button_path_selector = """//button[@type='submit']"""
@@ -144,19 +142,15 @@ class SeatAutoBooker:
             logging.info('输入密码')
             
             logging.info('点击登录按钮')
-            time.sleep(1)  # 稍微停顿，模拟人类操作节奏
+            time.sleep(1)
             self.driver.find_element(By.XPATH, button_path_selector).click()
             
-            # 🚨 最关键的 SSO 跳转等待逻辑
             logging.info('等待系统校验并跳出 SSO 统一认证中心...')
-            # 必须等到网址里彻底没有 sso 这个词
             long_wait.until_not(EC.url_contains("sso.hdu.edu.cn"))
             
             logging.info('等待完全回到图书馆主页...')
-            # 必须等到网址变回图书馆域名
             long_wait.until(EC.url_contains("hdu.huitu.zhishulib.com"))
             
-            # 跳转成功后，给网页 3 秒钟时间彻底把 Cookie 写进浏览器
             time.sleep(3)
             
             cookie_list = self.driver.get_cookies()
@@ -219,7 +213,6 @@ def is_booking_enable(date_cfg):
 if __name__ == "__main__":
     logging.info('Start of the program')
     
-    # 解决 Windows 下中文配置文件读取乱码的问题
     with open("user_config.yml", 'r', encoding='utf-8') as f_obj:
         user_config = yaml.safe_load(f_obj)
     with open("config/basic_config.yml", 'r', encoding='utf-8') as f_obj:
