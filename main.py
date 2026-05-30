@@ -13,6 +13,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.keys import Keys
 import time
 
 logging.basicConfig(
@@ -137,15 +138,32 @@ class SeatAutoBooker:
             self.driver.find_element(By.XPATH, user_path_selector).send_keys(self.un) 
             logging.info('输入用户名')
 
-            self.driver.find_element(By.XPATH, pwd_path_selector).clear()
-            self.driver.find_element(By.XPATH, pwd_path_selector).send_keys(self.pd)  
+            # 把密码框存成一个变量，方便后面操作
+            pwd_input = self.driver.find_element(By.XPATH, pwd_path_selector)
+            pwd_input.clear()
+            pwd_input.send_keys(self.pd)  
             logging.info('输入密码')
             
-            logging.info('点击登录按钮')
             time.sleep(1)
-            self.driver.find_element(By.XPATH, button_path_selector).click()
+            
+            # 💡 保险 1：按键盘的 ESC 键，强行关闭屏幕上可能挡住操作的公告弹窗
+            pwd_input.send_keys(Keys.ESCAPE)
+            time.sleep(0.5)
+
+            logging.info('尝试提交登录...')
+            
+            # 💡 保险 2：直接在密码框里按“回车键”提交，模拟真人操作，绕过按钮拦截
+            pwd_input.send_keys(Keys.RETURN)
+            
+            # 💡 保险 3：用底层 JavaScript 强行点击按钮（无视任何遮罩层）
+            try:
+                button = self.driver.find_element(By.XPATH, button_path_selector)
+                self.driver.execute_script("arguments[0].click();", button)
+            except Exception as js_e:
+                logging.debug(f"JS点击跳过: {js_e}")
             
             logging.info('等待系统校验并跳出 SSO 统一认证中心...')
+      
             long_wait.until_not(EC.url_contains("sso.hdu.edu.cn"))
             
             logging.info('等待完全回到图书馆主页...')
