@@ -14,6 +14,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
 
 # 简化日志输出，让最终的打印结果更清晰
 logging.basicConfig(
@@ -21,8 +22,8 @@ logging.basicConfig(
     datefmt='%H:%M:%S',
     level=logging.INFO)
 
-# 👑 核心修复：时区改为 0，因为你是在本地电脑（已经是北京时间）运行
-time_zone = 0  
+# ☁️ 云端专属修复：时区必须改为 8，以修正 GitHub 默认的 UTC 时间
+time_zone = 8  
 
 def get_seats_with_config(user_config, date_config, seat_config):
     seat_name = date_config['name']
@@ -35,27 +36,24 @@ class SeatAutoBooker:
         self.user_data = None
         logging.info('初始化抢座程序...')
 
-        # 读取账号密码 (本地运行默认使用括号里的值)
-        # ⚠️ 如果以后要传到公开的 GitHub 仓库，记得把这里的密码清空
-        self.un = os.environ.get("SCHOOL_ID", "23030711").strip()
-        self.pd = os.environ.get("PASSWORD", "20050718Why").strip()
-        self.SCKey = os.environ.get("SCKEY", "")
+        # 读取账号密码 (从 GitHub Secrets 环境变量中获取)
+        self.un = os.environ.get("SCHOOL_ID", "").strip()
+        self.pd = os.environ.get("PASSWORD", "").strip()
+        self.SCKey = os.environ.get("SCKEY", "").strip()
 
         chrome_options = Options()
-        # 👑 注释掉 headless（无头模式），让真正的浏览器弹出来防拦截
-        # chrome_options.add_argument('--headless') 
+        # ☁️ 云端专属修复：必须开启 headless（无头模式），因为云服务器没有物理显示器
+        chrome_options.add_argument('--headless') 
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
         chrome_options.add_argument('--window-size=1920,1080')
         # 伪装成真人电脑浏览器，防拦截
         chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
-        # 👑 物理级修复：直接读取本地的 chromedriver.exe，彻底掐断外网下载请求！
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        driver_path = os.path.join(current_dir, "chromedriver.exe")
-        service = Service(executable_path=driver_path)
+        os.environ['WDM_LOG'] = '0' 
         
-        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        # ☁️ 云端专属修复：GitHub 网络畅通无阻，直接使用 webdriver_manager 自动管理驱动
+        self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
         
         self.wait = WebDriverWait(self.driver, 20, 0.5)
         self.cookie = None
@@ -74,7 +72,7 @@ class SeatAutoBooker:
             
         start_time = start_time - timedelta(minutes=self.cfg["cron-delta-minutes"])
         
-        # 👑 核心修复：强行解除本地时间封印！无论几点都允许向服务器发包！
+        # 强行解除时间封印！无论几点都允许向服务器发包
         # if datetime.now() < start_time or datetime.now() > end_time:
         #     return -1, "未到预约时间"
             
@@ -145,7 +143,7 @@ class SeatAutoBooker:
             return 0
         except Exception as e:
             self.driver.save_screenshot("error_snap.png")
-            logging.error(f"网页登录过程中遇到异常，已截图保存。")
+            logging.error(f"网页登录过程中遇到异常，请检查 GitHub 环境。")
             return -1
 
     def get_user_info(self):
@@ -183,7 +181,7 @@ class SeatAutoBooker:
 
 if __name__ == "__main__":
     print("\n" + "="*45)
-    print("🚀 杭电图书馆自动抢座脚本启动 (物理断网终极版)")
+    print("🚀 杭电图书馆自动抢座脚本启动 (GitHub 云端完全体)")
     print("="*45 + "\n")
     
     try:
@@ -205,13 +203,13 @@ if __name__ == "__main__":
     if s.login() == 0:
         print("✅ 步骤 1/3：账号登录成功！获取到有效凭证。")
         if s.get_user_info() == 0:
-            print("✅ 步骤 2/3：获取个人信息成功！开始强行执行抢座请求...")
+            print("✅ 步骤 2/3：获取个人信息成功！开始执行抢座请求...")
             
             result = s.book_favorite_seat(user_config, seat_config)
             
             if result:
                 code, msg = result
-                # 👑 最终修复：兼容杭电系统奇葩的 "ok" 成功代码
+                # 兼容杭电系统奇葩的 "ok" 成功代码
                 if str(code) == "0" or str(code).lower() == "ok":
                     print(f"\n====================================\n🎉 最终结果: 预约成功！\n📝 详情: {msg}\n====================================\n")
                     s.wechatNotice("杭电图书馆预约成功", msg)
