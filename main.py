@@ -5,23 +5,24 @@ from datetime import datetime, timedelta
 import json
 import os
 import logging
+import time
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.keys import Keys
-import time
 
+# 简化日志输出，让最终的打印结果更清晰
 logging.basicConfig(
-    format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
+    format='%(asctime)s %(levelname)s: %(message)s',
     datefmt='%H:%M:%S',
-    level=logging.DEBUG)
+    level=logging.INFO)
 
-time_zone = 8  # 时区
+# 👑 核心修复：时区改为 0，因为你是在本地电脑（已经是北京时间）运行
+time_zone = 0  
 
 def get_seats_with_config(user_config, date_config, seat_config):
     seat_name = date_config['name']
@@ -31,34 +32,33 @@ def get_seats_with_config(user_config, date_config, seat_config):
 
 class SeatAutoBooker:
     def __init__(self, booker_config):
-        self.json = None
-        self.resp = None
         self.user_data = None
+        logging.info('初始化抢座程序...')
 
-        logging.info('Creating SeatAutoBooker object')
-
-        # 🔒 安全模式：从 GitHub Secrets 中读取你的账号和密码
-        self.un = os.environ.get("SCHOOL_ID", "").strip()
-        print("使用用户：***")  # 在日志中隐藏真实学号，保护隐私
-        self.pd = os.environ.get("PASSWORD", "").strip()
-        
-        self.SCKey = None
-        try:
-            self.SCKey = os.environ["SCKEY"]
-        except KeyError:
-            print("没有Server酱的key,将不会推送消息")
+        # 读取账号密码 (本地运行默认使用括号里的值)
+        # ⚠️ 如果以后要传到公开的 GitHub 仓库，记得把这里的密码清空
+        self.un = os.environ.get("SCHOOL_ID", "23030711").strip()
+        self.pd = os.environ.get("PASSWORD", "20050718Why").strip()
+        self.SCKey = os.environ.get("SCKEY", "")
 
         chrome_options = Options()
-        chrome_options.add_argument('--headless')
+        # 👑 注释掉 headless（无头模式），让真正的浏览器弹出来防拦截
+        # chrome_options.add_argument('--headless') 
         chrome_options.add_argument('--no-sandbox')
         chrome_options.add_argument('--disable-dev-shm-usage')
-        # 💻 新增：强制设置浏览器分辨率为 1920x1080（解决云端小屏幕问题）
         chrome_options.add_argument('--window-size=1920,1080')
+        # 伪装成真人电脑浏览器，防拦截
+        chrome_options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
         
-        self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-        self.wait = WebDriverWait(self.driver, 10, 0.5)
+        # 👑 物理级修复：直接读取本地的 chromedriver.exe，彻底掐断外网下载请求！
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        driver_path = os.path.join(current_dir, "chromedriver.exe")
+        service = Service(executable_path=driver_path)
+        
+        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        self.wait = WebDriverWait(self.driver, 20, 0.5)
         self.cookie = None
-
         self.cfg = booker_config
 
     def book_favorite_seat(self, user_config, seat_config):
@@ -74,21 +74,20 @@ class SeatAutoBooker:
             
         start_time = start_time - timedelta(minutes=self.cfg["cron-delta-minutes"])
         
-        if datetime.now() < start_time or datetime.now() > end_time:
-            return -1, "未到预约时间"
+        # 👑 核心修复：强行解除本地时间封印！无论几点都允许向服务器发包！
+        # if datetime.now() < start_time or datetime.now() > end_time:
+        #     return -1, "未到预约时间"
             
-        logging.info('Booking favorite seat')
-        retry_sleep_time = timedelta(minutes=self.cfg["cron-delta-minutes"]).seconds*2/(self.cfg["max-retry"]-2) - 10
         for tried_times in range(self.cfg["max-retry"]):
             try:
                 return self._book_favorite_seat(user_config, seat_config, tried_times)
             except Exception as e:
-                logging.exception(e)
-                print(e.__class__, "尝试第{}次".format(tried_times))
-                time.sleep(retry_sleep_time)
+                logging.warning(f"第 {tried_times+1} 次尝试发包失败，10秒后重试... ({e})")
+                time.sleep(10)
+        
+        return -2, "已达到最大重试次数，预约失败"
 
     def _book_favorite_seat(self, user_config, seat_config, tried_times=0):
-        logging.info('Entering _book_favorite_seat method')
         the_day_after_tomorrow = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][(datetime.now().weekday() + 2) % 7]
         date_config = user_config[the_day_after_tomorrow]
         seats = get_seats_with_config(user_config, date_config, seat_config)
@@ -97,165 +96,137 @@ class SeatAutoBooker:
         delta = book_time - self.cfg["start-time"]
         total_seconds = delta.days * 24 * 3600 + delta.seconds
         
-        if date_config['name'] == '自定义' and tried_times < self.cfg["max-retry"]/3*2:
-            seat = seats[0]
-        else:
-            seat = random.choice(seats)
-            
+        # 让你在有多个自定义座位时，随机挑选一个抢（增加容错）
+        seat = random.choice(seats)
         data = f"beginTime={total_seconds}&duration={3600 * date_config['持续小时数']}&&seats[0]={seat}&seatBookers[0]={self.user_data['uid']}"
 
         headers = self.cfg["headers"]
         headers['Cookie'] = self.cookie
-        print("发送请求数据:", data)
-        self.resp = requests.post(self.cfg["target"], data=data, headers=headers)
-        self.json = json.loads(self.resp.text)
-        return self.json["CODE"], self.json["MESSAGE"] + " 座位:{}".format(seat)
+        resp = requests.post(self.cfg["target"], data=data, headers=headers)
+        res_json = json.loads(resp.text)
+        return res_json["CODE"], res_json["MESSAGE"] + f" (尝试座位号:{seat})"
 
     def login(self):
-        logging.info('Login in')
-
-        user_path_selector = """//input[@placeholder='请输入学工号/绑定手机/证件号' or @name='username']"""
-        pwd_path_selector = """//input[@type='password']"""
-        button_path_selector = """//button[@type='submit']"""
+        user_selector = "//input[contains(@placeholder, '学工号') or @name='username']"
+        pwd_selector = "//input[@type='password']"
+        btn_selector = "//button[contains(., '登录')]"
 
         try:
-            logging.info('开始登陆...')
+            logging.info('开始访问登录页面，请耐心等待网页完全渲染...')
             self.driver.get("https://hdu.huitu.zhishulib.com/")
-            logging.debug('打开网站.')
-
-            long_wait = WebDriverWait(self.driver, 30, 0.5)
-
-            long_wait.until(EC.presence_of_element_located((By.XPATH, user_path_selector)))
-            logging.debug('找到用户名输入框.')
-
-            long_wait.until(EC.presence_of_element_located((By.XPATH, pwd_path_selector)))
-            logging.debug('找到密码输入框.')
-
-            long_wait.until(EC.presence_of_element_located((By.XPATH, button_path_selector)))
-            logging.debug('找到登录按钮.')
-
-            self.driver.find_element(By.XPATH, user_path_selector).clear()
-            self.driver.find_element(By.XPATH, user_path_selector).send_keys(self.un) 
-            logging.info('输入用户名')
-
-            # 把密码框存成一个变量，方便后面操作
-            pwd_input = self.driver.find_element(By.XPATH, pwd_path_selector)
-            pwd_input.clear()
-            pwd_input.send_keys(self.pd)  
-            logging.info('输入密码')
+            
+            # 💡 强制冷静8秒，等网页画完
+            time.sleep(8)
+            
+            # 💡 耐心拉长到60秒，要求元素可见
+            super_wait = WebDriverWait(self.driver, 60, 1)
+            super_wait.until(EC.visibility_of_element_located((By.XPATH, user_selector)))
+            
+            self.driver.find_element(By.XPATH, user_selector).send_keys(self.un)
+            pwd_el = self.driver.find_element(By.XPATH, pwd_selector)
+            pwd_el.send_keys(self.pd)
             
             time.sleep(1)
+            pwd_el.send_keys(Keys.ENTER)
+            logging.info('已提交表单，等待登录系统验证...')
             
-            # 💡 保险 1：按键盘的 ESC 键，强行关闭屏幕上可能挡住操作的公告弹窗
-            pwd_input.send_keys(Keys.ESCAPE)
-            time.sleep(0.5)
-
-            logging.info('尝试提交登录...')
-            
-            # 💡 保险 2：直接在密码框里按“回车键”提交，模拟真人操作，绕过按钮拦截
-            pwd_input.send_keys(Keys.RETURN)
-            
-            # 💡 保险 3：用底层 JavaScript 强行点击按钮（无视任何遮罩层）
             try:
-                button = self.driver.find_element(By.XPATH, button_path_selector)
+                button = self.driver.find_element(By.XPATH, btn_selector)
                 self.driver.execute_script("arguments[0].click();", button)
-            except Exception as js_e:
-                logging.debug(f"JS点击跳过: {js_e}")
-            
-            logging.info('等待系统校验并跳出 SSO 统一认证中心...')
-      
-            long_wait.until_not(EC.url_contains("sso.hdu.edu.cn"))
-            
-            logging.info('等待完全回到图书馆主页...')
-            long_wait.until(EC.url_contains("hdu.huitu.zhishulib.com"))
+            except Exception:
+                pass
+
+            super_wait.until_not(EC.url_contains("sso.hdu.edu.cn"))
+            super_wait.until(EC.url_contains("hdu.huitu.zhishulib.com"))
             
             time.sleep(3)
-            
-            cookie_list = self.driver.get_cookies()
-            self.cookie = ";".join([item["name"] + "=" + item["value"] + "" for item in cookie_list])
+            self.cookie = ";".join([f"{c['name']}={c['value']}" for c in self.driver.get_cookies()])
             self.cfg["headers"]['Cookie'] = self.cookie
-
-            logging.info("登录成功！获取到真实 Cookie。")
+            return 0
         except Exception as e:
-            logging.error(f"登录失败：{e}")
-            try:
-                self.driver.save_screenshot("error_snap.png")
-                logging.info("📸 已经拍下当前浏览器的画面，保存在代码同级目录的 error_snap.png 中！")
-            except Exception as snap_e:
-                logging.error(f"截图失败: {snap_e}")
+            self.driver.save_screenshot("error_snap.png")
+            logging.error(f"网页登录过程中遇到异常，已截图保存。")
             return -1
-        return 0
 
     def get_user_info(self):
-        logging.info('Getting user info')
-
         headers = self.cfg["headers"]
         headers['Cookie'] = self.cookie
+        # 💡 给 requests 穿上马甲，防止卡死
+        headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        
         try:
-            resp = requests.get("https://hdu.huitu.zhishulib.com/Seat/Index/searchSeats?LAB_JSON=1",
-                                headers=headers)
-            self.user_data = resp.json()['DATA']
-            _ = self.user_data['uid']
+            resp = requests.get("https://hdu.huitu.zhishulib.com/Seat/Index/searchSeats?LAB_JSON=1", headers=headers, timeout=15)
+            try:
+                res_json = resp.json()
+                self.user_data = res_json['DATA']
+                return 0
+            except json.JSONDecodeError:
+                logging.error(f"服务器未返回正确数据！前200字：{resp.text[:200]}")
+                return -1
+            except KeyError:
+                logging.error(f"未找到 DATA 字段！完整返回：{res_json}")
+                return -1
         except Exception as e:
-            logging.exception(e)
-            print(self.user_data)
-            print(e.__class__.__name__ + ",获取用户数据失败")
+            logging.error(f"网络请求报错: {e}")
             return -1
-        print("获取用户数据成功")
-        return 0
 
-    def wechatNotice(self, message, desp=None):
-        logging.info('Sending WeChat notice')
-
-        if self.SCKey != '':
-            url = 'https://sctapi.ftqq.com/{0}.send'.format(self.SCKey)
-            data = {
-                'title': message,
-                'desp': desp,
-            }
+    def wechatNotice(self, title, desp=None):
+        if self.SCKey and self.SCKey.strip() != '':
+            url = f'https://sctapi.ftqq.com/{self.SCKey}.send'
+            data = {'title': title, 'desp': desp}
             try:
                 r = requests.post(url, data=data)
                 if r.json()["data"]["error"] == 'SUCCESS':
-                    print("Server酱通知成功")
-                else:
-                    print("Server酱通知失败")
+                    logging.info("📢 Server酱微信推送成功！")
             except Exception as e:
-                logging.exception(e)
-                print(e.__class__, "推送服务配置错误")
-
-def is_booking_enable(date_cfg):
-    if date_cfg['启用']:
-        return True
-    return False
+                logging.error("推送服务调用错误。")
 
 if __name__ == "__main__":
-    logging.info('Start of the program')
+    print("\n" + "="*45)
+    print("🚀 杭电图书馆自动抢座脚本启动 (物理断网终极版)")
+    print("="*45 + "\n")
     
-    with open("user_config.yml", 'r', encoding='utf-8') as f_obj:
-        user_config = yaml.safe_load(f_obj)
-    with open("config/basic_config.yml", 'r', encoding='utf-8') as f_obj:
-        basic_config = yaml.safe_load(f_obj)
-    with open("config/seat_config.yml", 'r', encoding='utf-8') as f_obj:
-        seat_config = yaml.safe_load(f_obj)
+    try:
+        with open("user_config.yml", 'r', encoding='utf-8') as f: user_config = yaml.safe_load(f)
+        with open("config/basic_config.yml", 'r', encoding='utf-8') as f: basic_config = yaml.safe_load(f)
+        with open("config/seat_config.yml", 'r', encoding='utf-8') as f: seat_config = yaml.safe_load(f)
+    except FileNotFoundError:
+        print("❌ 找不到配置文件！请确保在正确的目录下运行本程序。")
+        exit(-1)
 
     the_day_after_tomorrow = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][(datetime.now().weekday() + 2) % 7]
     
-    if not is_booking_enable(user_config[the_day_after_tomorrow]):
-        logging.info('预约未启用')
-        print("预约未启用")
+    if not user_config[the_day_after_tomorrow]['启用']:
+        print(f"⏸️  配置文件中设置了 {the_day_after_tomorrow} 不抢座，程序正常退出。")
         exit(0)
 
     s = SeatAutoBooker(basic_config["SeatAutoBooker"])
-    if not s.login() == 0:
-        s.driver.quit()
-        logging.info('Login unsuccessful')
-        exit(-1)
-        
-    if not s.get_user_info() == 0:
-        s.driver.quit()
-        logging.info('Getting user info unsuccessful')
-        exit(-1)
-        
-    s.book_favorite_seat(user_config=user_config, seat_config=seat_config)
+    
+    if s.login() == 0:
+        print("✅ 步骤 1/3：账号登录成功！获取到有效凭证。")
+        if s.get_user_info() == 0:
+            print("✅ 步骤 2/3：获取个人信息成功！开始强行执行抢座请求...")
+            
+            result = s.book_favorite_seat(user_config, seat_config)
+            
+            if result:
+                code, msg = result
+                # 👑 最终修复：兼容杭电系统奇葩的 "ok" 成功代码
+                if str(code) == "0" or str(code).lower() == "ok":
+                    print(f"\n====================================\n🎉 最终结果: 预约成功！\n📝 详情: {msg}\n====================================\n")
+                    s.wechatNotice("杭电图书馆预约成功", msg)
+                elif code == -1:
+                    print(f"\n====================================\n⏳ 最终结果: {msg}\n====================================\n")
+                else:
+                    print(f"\n====================================\n❌ 最终结果: 预约失败！\n📝 详情: {msg} (错误码: {code})\n====================================\n")
+                    s.wechatNotice("杭电图书馆预约失败", f"错误码: {code}\n详细信息: {msg}")
+            else:
+                 print("\n====================================\n❌ 最终结果: 发生未知错误，未能返回抢座状态。\n====================================\n")
+        else:
+            print("\n❌ 最终结果: 步骤 2 失败 (无法获取用户信息)。")
+    else:
+        print("\n❌ 最终结果: 步骤 1 失败 (登录图书馆系统失败)。")
+
+    time.sleep(3)
     s.driver.quit()
-    logging.info('End of the program')
+    print("🛑 程序运行结束。\n")
